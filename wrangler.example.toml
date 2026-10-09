@@ -1,0 +1,31 @@
+# 可选：使用 wrangler 部署时复制为 wrangler.toml。用 Dashboard 粘贴部署可忽略本文件。
+name = "tgproxy"
+main = "telegram_webproxy.js"
+compatibility_date = "2026-07-01"
+
+# 机密请用 `wrangler secret put SECRET` 和 `wrangler secret put BOOT` 设置，不要写进本文件。
+# SECRET 可写多个（逗号分隔，最多 4 个）用于轮换，新密钥放在前面。
+
+[vars]
+# SESSION_TTL = "300"     # 秒：新开 lane 的准入窗口，页面在约 60% 时自动续期（10–3600）
+# SESSION_MAX = "86400"   # 秒：会话绝对寿命，到点关闭所有 lane（60–604800）
+# LANE_LOG = "1"          # 每条 lane 关闭时输出一行 JSON 统计（不含 token、IP、请求头）
+
+# 可选：Workers Rate Limiting，按 Cloudflare 节点计数。未配置时使用每实例内存限速（30 / 300 次每分钟每 IP）。
+# [[ratelimits]]
+# name = "RL_SESSION"     # 页面下发 + 会话创建 + 续期
+# namespace_id = "1001"
+#   [ratelimits.simple]
+#   limit = 30
+#   period = 60
+#
+# [[ratelimits]]
+# name = "RL_LANE"        # lane WebSocket 握手
+# namespace_id = "1002"
+#   [ratelimits.simple]
+#   limit = 300
+#   period = 60
+
+# 可选：在控制台查看调用日志、CPU 时间和 1102 错误
+# [observability]
+# enabled = true
