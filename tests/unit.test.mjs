@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { load } from './helpers/load.mjs';
 import { CtrStream, pktEE, rand } from './helpers/obfs.mjs';
 
-const W = await load(['CFG', 'mkCap', 'bridge', 'mkToken', 'unseal', 'verify', 'mkSess', 'sessOf', 'authBoot', 'mkCtr', 'enc', 'frames', 'mkPkt', 'mkHead', 'headOf', 'mkWire', 'mkCfg', 'allow', 'small', 'buckets', 'dnBuf', 'b64']);
+const W = await load(['CFG', 'mkCap', 'bridge', 'mkToken', 'unseal', 'verify', 'mkSess', 'sessOf', 'authBoot', 'mkCtr', 'enc', 'frames', 'mkPkt', 'mkHead', 'headOf', 'mkWire', 'mkStream', 'mkSession', 'mkCfg', 'allow', 'small', 'buckets', 'dnBuf', 'b64', 'cat', 'macKeys']);
 const SECRET = '000102030405060708090a0b0c0d0e0f', HOST = 'proxy.example.com';
 const BRIDGE = 'MHLEY5PmW1GWqJkSrlmJpvJUiLhBH_QKy6yKg8a0JPk'; // tproxy-server PROTOCOL.md test vector
 const now = () => Math.floor(Date.now() / 1000);
@@ -158,4 +158,83 @@ test('small(): body size cap with and without Content-Length', async () => {
   assert.equal(await W.small(mk(new Uint8Array(65)), 64), null);
   const stream = new ReadableStream({ start(c) { c.enqueue(new Uint8Array(40)); c.enqueue(new Uint8Array(40)); c.close(); } });
   assert.equal(await W.small(new Request('https://x.example/', { method: 'POST', body: stream, duplex: 'half' }), 64), null);
+});
+
+test('mkStream: a failed push closes the stream itself (onClose fires) and the queued push rejects without writing', async () => {
+  const origFetch = globalThis.fetch;
+  const fakeWs = new FakeWS(); fakeWs.accept = () => {};
+  const sent = []; fakeWs.send = b => sent.push(new Uint8Array(b));
+  globalThis.fetch = async () => ({ status: 101, webSocket: fakeWs, headers: new Headers({ 'Sec-WebSocket-Protocol': 'binary' }) });
+  try {
+    const c = cfg();
+    const { clientHandshake, pktEE } = await import('./helpers/obfs.mjs');
+    const obf = await clientHandshake(SECRET, { dc: 2 });
+    let closedCount = 0;
+    const s = W.mkStream({ keys: c.keys, emit: async () => {}, onClose: () => { closedCount++; } });
+    await s.push(obf.wire); // handshake succeeds
+    const before = sent.length;
+    // Queue two pushes > upPack apart so they don't coalesce: first has a 0-length packet (throws in mkPkt), second is valid
+    const badPkt = await obf.tx.xor(new Uint8Array(4)); // pLen = 0 -> mkPkt throws!
+    const validPad = await obf.tx.xor(pktEE(new Uint8Array(20 * 1024)));
+    const [r1, r2] = await Promise.allSettled([s.push(badPkt), s.push(validPad)]);
+    assert.equal(r1.status, 'rejected');
+    assert.equal(r2.status, 'rejected');
+    assert.equal(sent.length, before, 'no packets written after stream error');
+    assert.equal(closedCount, 1, 'stream released its upstream on its own');
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+test('small(): Content-Length must be plain decimal digits (RFC 9110 1*DIGIT)', async () => {
+  const mk = (len) => new Request('https://x.example/', { method: 'POST', body: new Uint8Array(4), headers: { 'Content-Length': len } });
+  assert.equal((await W.small(mk('4'), 64))?.byteLength, 4);
+  for (const len of ['-5', '1.5', 'abc', '', '0x10', '1e1', '+4']) assert.equal(await W.small(mk(len), 64), null, `Content-Length ${JSON.stringify(len)}`);
+});
+
+test('b64: encodes buffers past the spread-argument limit (1 MiB) without RangeError', () => {
+  // 1048576 = 3 * 349525 + 1 -> 349525 * 4 + 2 unpadded chars; zero bytes encode as 'A'
+  assert.equal(W.b64(new Uint8Array(1048576)), 'A'.repeat(1398102));
+});
+
+test('cat: zero-copy or single-part fast path and multi-part concatenation', () => {
+  const a = new Uint8Array([1, 2, 3]), b = new Uint8Array([4, 5]);
+  assert.equal(W.cat().byteLength, 0);
+  assert.strictEqual(W.cat(a), a); // single Uint8Array should return as-is without reallocating
+  assert.strictEqual(W.cat(null, new Uint8Array(0), a), a);
+  assert.deepEqual([...W.cat(a, b)], [1, 2, 3, 4, 5]);
+});
+
+test('mkCfg: caches parsed config across calls with identical env values', () => {
+  const env1 = { SECRET: `${SECRET}, dd${'ab'.repeat(16)}`, BOOT: 'boot-1', SESSION_TTL: '120', SESSION_MAX: '3600', LANE_LOG: '1' };
+  const env2 = { SECRET: `${SECRET}, dd${'ab'.repeat(16)}`, BOOT: 'boot-1', SESSION_TTL: '120', SESSION_MAX: '3600', LANE_LOG: '1' };
+  const c1 = W.mkCfg(env1), c2 = W.mkCfg(env2);
+  assert.strictEqual(c1, c2);
+  const c3 = W.mkCfg({ ...env1, SESSION_TTL: '180' });
+  assert.notStrictEqual(c1, c3);
+  assert.equal(c3.ttl, 180);
+});
+
+test('mkCfg: a rejected config keeps being rejected instead of returning the previously cached one', () => {
+  const good = W.mkCfg({ SECRET, BOOT: 'old-boot' });
+  assert.equal(good.boot, 'old-boot');
+  const bad = { SECRET: 'invalid', BOOT: 'new-boot' };
+  assert.throws(() => W.mkCfg(bad));
+  assert.throws(() => W.mkCfg(bad));
+});
+
+test('mkCfg: field boundaries are part of the cache key (newlines inside values do not collide)', () => {
+  const k1 = 'ab'.repeat(16), k2 = 'cd'.repeat(16);
+  const a = W.mkCfg({ SECRET: `${k1}\n${k2}`, BOOT: 'x' });
+  const b = W.mkCfg({ SECRET: k1, BOOT: `${k2}\nx` });
+  assert.equal(a.keys.length, 2);
+  assert.equal(b.keys.length, 1);
+  assert.equal(b.boot, `${k2}\nx`);
+});
+
+test('macKey: cache is bounded so rotating secrets never leaks unbounded memory', async () => {
+  for (let i = 0; i < 40; i++) {
+    await W.mkToken(`boot-rotate-${i}`, 'bootstrap', now() + 60, rand(12));
+  }
+  assert.ok(W.macKeys.size <= 32, `macKeys.size=${W.macKeys.size} should be bounded`);
 });

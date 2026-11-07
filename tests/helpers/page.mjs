@@ -6,7 +6,7 @@ import { HOST } from './harness.mjs';
 
 export function runPage(h, html, { failSids = new Set(), hangSids = new Set() } = {}) {
   const code = /<script nonce="[^"]+">([\s\S]*)<\/script>/.exec(html)[1];
-  const listeners = {}, calls = [];
+  const listeners = {}, calls = [], sockets = new Map();
   const parent = {};
   const fetchMock = async (url, init = {}) => {
     calls.push({ url, method: init.method });
@@ -17,20 +17,23 @@ export function runPage(h, html, { failSids = new Set(), hangSids = new Set() } 
     constructor(url, protocol) {
       this.readyState = 0; this.bufferedAmount = 0; this.protocol = protocol;
       const sid = Number(protocol.split('.')[2]);
+      sockets.set(sid, this);
       calls.push({ url, ws: sid, protocol });
       if (hangSids.has(sid)) return;
       queueMicrotask(async () => {
+        if (this.readyState === 3) return;
         if (failSids.has(sid)) { this.readyState = 3; this.onerror?.({}); this.onclose?.({ code: 1006 }); return; }
         const res = await h.mf.dispatchFetch(url.replace(/^wss:/, 'https:'), { headers: { Upgrade: 'websocket', 'Sec-WebSocket-Protocol': protocol } });
+        if (this.readyState === 3) { try { res.webSocket?.accept(); res.webSocket?.close(1000); } catch {} return; }
         if (res.status !== 101) { this.readyState = 3; this.onerror?.({}); this.onclose?.({ code: 1006 }); return; }
         const ws = this.ws = res.webSocket; ws.accept();
-        ws.addEventListener('message', e => this.onmessage?.({ data: e.data }));
-        ws.addEventListener('close', e => { this.readyState = 3; this.onclose?.({ code: e.code }); });
+        ws.addEventListener('message', e => { if (this.readyState === 1) this.onmessage?.({ data: e.data }); });
+        ws.addEventListener('close', e => { if (this.readyState === 3) return; this.readyState = 3; this.onclose?.({ code: e.code }); });
         this.readyState = 1; this.onopen?.({});
       });
     }
     send(v) { this.ws.send(v); }
-    close() { if (this.readyState === 3) return; this.readyState = 3; try { this.ws?.close(1000); } catch {} }
+    close() { if (this.readyState === 3) return; this.readyState = 3; try { this.ws?.close(1000); } catch {} queueMicrotask(() => this.onclose?.({ code: 1000 })); }
   }
   const env = {
     location: { hash: '', pathname: '/' }, history: { replaceState() {} }, parent,
@@ -52,6 +55,9 @@ export function runPage(h, html, { failSids = new Set(), hangSids = new Set() } 
   return {
     calls, app: app$,
     send: (type, sid, payload) => { const f = frame(type, sid, payload); app.postMessage(f.buffer, [f.buffer]); },
+    sendRaw: (bytes) => { const b = bytes.slice(); app.postMessage(b.buffer, [b.buffer]); },
+    setBuffered: (sid, n) => { const s = sockets.get(sid); if (s) s.bufferedAmount = n; },
+    isOpen: sid => sockets.get(sid)?.readyState === 1,
     hello() { const f = hello(); app.postMessage(f.buffer, [f.buffer]); },
     async until(pred, ms = 5000) { const end = Date.now() + ms; while (!pred(app$)) { if (Date.now() > end) throw new Error(`timeout: frames=${app$.frames.map(f => `${f.type}@${f.sid}`).join(',')} status=${app$.status.at(-1)} closed=${app$.closed}`); await new Promise(ok => { app$.waiters.push(ok); setTimeout(ok, 50); }); } },
     close() { app.postMessage({ t: 'close' }); },

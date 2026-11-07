@@ -11,5 +11,5 @@ export async function load(names) {
   const src = readFileSync(WORKER, 'utf8').replace(/^export default /m, 'const __default = ');
   const file = join(mkdtempSync(join(tmpdir(), 'tgproxy-')), 'worker.mjs');
   writeFileSync(file, `${src}\nexport { __default, ${names.join(', ')} };\n`);
-  return import(file);
+  return import(pathToFileURL(file).href);
 }
