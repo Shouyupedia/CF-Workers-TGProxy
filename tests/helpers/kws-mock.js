@@ -5,14 +5,20 @@ class CtrStream { constructor(k, iv) { this.k = C.subtle.importKey('raw', k, 'AE
   async xor(d) { const off = this.off; this.off += d.length; const s = off % 16; const b = new Uint8Array(s + d.length); b.set(d, s); return new Uint8Array(await C.subtle.encrypt({ name: 'AES-CTR', counter: addCtr(this.iv, Math.floor(off / 16)), length: 128 }, await this.k, b)).subarray(s); } }
 const cat = (a, b) => { const o = new Uint8Array(a.length + b.length); o.set(a); o.set(b, a.length); return o; };
 const log = [];
+// per-host behaviour for the hedged-dial tests: { "<host>": { delay: ms, status: n } }
+let ctl = {};
 export default {
   async fetch(req) {
     const url = new URL(req.url);
     if (url.pathname === '/__log') return Response.json(log);
-    if (url.pathname === '/__reset') { log.length = 0; return new Response('ok'); }
+    if (url.pathname === '/__reset') { log.length = 0; ctl = {}; return new Response('ok'); }
+    if (url.pathname === '/__ctl') { ctl = await req.json(); return new Response('ok'); }
     if (req.headers.get('Upgrade')?.toLowerCase() !== 'websocket') return new Response('no', { status: 426 });
-    const entry = { host: url.hostname, path: url.pathname, proto: req.headers.get('Sec-WebSocket-Protocol'), ext: req.headers.get('Sec-WebSocket-Extensions'), msgs: 0, bytes: 0 };
+    const entry = { host: url.hostname, path: url.pathname, proto: req.headers.get('Sec-WebSocket-Protocol'), ext: req.headers.get('Sec-WebSocket-Extensions'), msgs: 0, bytes: 0, t: Date.now() };
     log.push(entry);
+    const rule = ctl[url.hostname] ?? {};
+    if (rule.delay) await new Promise(r => setTimeout(r, rule.delay));
+    if (rule.status) return new Response('down', { status: rule.status });
     if (url.hostname.startsWith('kws5')) return new Response('down', { status: 502 }); // simulate an unreachable DC
     const { 0: client, 1: server } = new WebSocketPair(); server.binaryType = 'arraybuffer'; server.accept();
     let head = new Uint8Array(0), rx = null, tx = null, chain = Promise.resolve();

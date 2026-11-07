@@ -8,9 +8,10 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "node --test tests/unit.test.mjs tests/integration.test.mjs tests/page.test.mjs",
-    "test:unit": "node --test tests/unit.test.mjs",
-    "test:integration": "node --test tests/integration.test.mjs tests/page.test.mjs"
+    "test": "node --test tests/unit.test.mjs tests/dial.test.mjs tests/integration.test.mjs tests/hedge.test.mjs tests/page.test.mjs",
+    "test:unit": "node --test tests/unit.test.mjs tests/dial.test.mjs",
+    "test:integration": "node --test tests/integration.test.mjs tests/hedge.test.mjs tests/page.test.mjs",
+    "test:real": "node tests/real/probe-kws.mjs && node tests/real/real-proxy.mjs"
   },
   "devDependencies": {
     "miniflare": "^4.20260730.0"

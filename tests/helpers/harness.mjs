@@ -25,6 +25,7 @@ export async function start(bindings = {}, extra = {}, workerPath = fileURLToPat
     fetch: (path, init) => mf.dispatchFetch(`https://${HOST}${path}`, init),
     kwsLog: async () => (await kws.fetch('http://kws.local/__log')).json(),
     kwsReset: () => kws.fetch('http://kws.local/__reset'),
+    kwsCtl: rules => kws.fetch('http://kws.local/__ctl', { method: 'POST', body: JSON.stringify(rules) }),
     dispose: () => mf.dispose(),
   };
 }

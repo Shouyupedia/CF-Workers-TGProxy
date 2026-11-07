@@ -180,6 +180,7 @@ Cloudflare Workers 不会把同一会话的请求固定到同一个 isolate。�
 | 撤销检查间隔 | 已建立 lane 检查撤销与寿命 | `5` 秒 |
 | 回退限速 | 每 IP 每 60 秒：会话类 / lane 握手 | `30` / `300` |
 | KWS 端点 | Telegram Web K 出站 | `kws{1..5}[-1].web.telegram.org/apiws` |
+| 备用连接延迟 | 首选 KWS 域名在此时间内未建连成功，就同时拨同一 DC 的另一个域名，先通过校验者胜出；首选提前失败则立即拨备用 | `1500` ms（`DIAL_HEDGE_MS`） |
 
 ## 密钥与环境变量
 
@@ -190,6 +191,7 @@ Cloudflare Workers 不会把同一会话的请求固定到同一个 isolate。�
 | `SESSION_TTL` | 可选，session token 有效期（秒） | `10`–`3600`，默认 `300` |
 | `SESSION_MAX` | 可选，会话绝对寿命（秒） | `60`–`604800`，默认 `86400` |
 | `LANE_LOG` | 可选，设为 `1` 时每条 lane 关闭时输出一行 JSON 统计 | 只含原因、时长、上下行字节、DC，不含 token、IP 或请求头 |
+| `DIAL_HEDGE_MS` | 可选，启动备用 KWS 连接前的等待时间（毫秒） | `0`–`7500`，默认 `1500`；`0` 为两个域名同时拨，`7500` 等同只在首选失败或超时后才拨备用 |
 | `RL_SESSION` / `RL_LANE` | 可选，Workers Rate Limiting 绑定 | 见 `wrangler.example.toml` |
 
 生成命令：
